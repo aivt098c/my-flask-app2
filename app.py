@@ -168,6 +168,18 @@ def estimate_complexity(gray_image):
     gc.collect()
     return edge_strength
 
+# 🔹 自動縮小影格尺寸（長邊限制在 480px）
+def resize_frame_to_480p(frame):
+    h, w = frame.shape[:2]
+    max_dim = max(h, w)
+    if max_dim <= 480:
+        return frame  # 不需縮小
+
+    scale = 480 / max_dim
+    new_w, new_h = int(w * scale), int(h * scale)
+    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return resized
+
 # 🔹 單張影格分析
 def detect_watermark_in_frame(frame):
     entropy_map, gray = dct_entropy_map_single_image(frame)
@@ -181,6 +193,10 @@ def detect_watermark_in_frame(frame):
 
     print(f"📊 熱統計: 平均={mean_val:.4f}, q95={q95_val:.4f}, 複雜度={complexity:.4f}")
     suspicious = (mean_val > threshold_mean) or (q95_val > threshold_q95)
+
+    del entropy_map, gray, flat
+    gc.collect()
+    
     return suspicious
 
 # 🔹 影片幀分析（記憶體優化版）
@@ -205,6 +221,9 @@ def detect_watermark_in_video_frames(video_path, sample_rate=1800, max_frames=10
         ret, frame = cap.read()
         if not ret or frame is None:
             continue
+
+        # 🔹 加入自動影格縮小
+        frame = resize_frame_to_480p(frame)
 
         try:
             if detect_watermark_in_frame(frame):
