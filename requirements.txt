@@ -1,2 +1,8 @@
 flask
 gunicorn
+opencv-python
+numpy
+scipy
+librosa
+yt-dlp
+moviepy
