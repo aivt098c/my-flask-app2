@@ -144,6 +144,7 @@ def block_entropy_dct(block):
 # 🔹 全圖 DCT 熵圖
 def dct_entropy_map_single_image(image, block_size=16):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, (480, int(gray.shape[0] * 480 / gray.shape[1])), interpolation=cv2.INTER_AREA)
     h, w = gray.shape
     h_blocks = h // block_size
     w_blocks = w // block_size
@@ -196,7 +197,7 @@ def detect_watermark_in_frame(frame):
 
     del entropy_map, gray, flat
     gc.collect()
-    
+
     return suspicious
 
 # 🔹 影片幀分析（記憶體優化版）
