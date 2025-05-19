@@ -127,84 +127,67 @@ def check_file_size(file_path, max_size_mb=2000):
 # | 所有臨時變數結束後用 `del` 清除                    | 明確釋放 NumPy 資源             |
 # | OpenCV Sobel 輸出避免高階浮點精度                | 使用 `float32` 而非 `float64` |
 
-
-# 🔹 單個區塊的 DCT 熵
 def block_entropy_dct(block):
-    block = np.float32(block) / 255.0  # 減少記憶體用量
+    block = np.float32(block) / 255.0
     dct_block = cv2.dct(block)
-    dct_block[0, 0] = 0  # 去除 DC 分量
+    dct_block[0, 0] = 0
     magnitude = np.abs(dct_block)
-    total = np.sum(magnitude) + 1e-8
-    magnitude /= total
-    flat = magnitude.flatten()
-    ent = entropy(flat)
-    del dct_block, magnitude, flat
-    return ent
+    magnitude /= magnitude.sum() + 1e-8
+    return entropy(magnitude.flatten())
 
-# 🔹 全圖 DCT 熵圖
 def dct_entropy_map_single_image(image, block_size=16):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, (480, int(gray.shape[0] * 480 / gray.shape[1])), interpolation=cv2.INTER_AREA)
     h, w = gray.shape
-    h_blocks = h // block_size
-    w_blocks = w // block_size
-    entropy_map = np.zeros((h_blocks, w_blocks), dtype=np.float32)
+    entropy_map = np.zeros((h // block_size, w // block_size), dtype=np.float32)
 
-    for i in range(h_blocks):
-        for j in range(w_blocks):
-            block = gray[i*block_size:(i+1)*block_size, j*block_size:(j+1)*block_size]
-            entropy_map[i, j] = block_entropy_dct(block)
+    for i in range(0, h - block_size + 1, block_size):
+        for j in range(0, w - block_size + 1, block_size):
+            block = gray[i:i+block_size, j:j+block_size]
+            e = block_entropy_dct(block)
+            entropy_map[i // block_size, j // block_size] = e
 
     return entropy_map, gray
 
-# 🔹 複雜度（邊緣強度）
 def estimate_complexity(gray_image):
-    gray_image = np.float32(gray_image)
-    sobelx = cv2.Sobel(gray_image, cv2.CV_32F, 1, 0, ksize=3)
-    sobely = cv2.Sobel(gray_image, cv2.CV_32F, 0, 1, ksize=3)
-    edge_magnitude = cv2.magnitude(sobelx, sobely)
-    edge_strength = np.mean(edge_magnitude)
+    sobelx = cv2.Sobel(gray_image, cv2.CV_64F, 1, 0, ksize=3)
+    sobely = cv2.Sobel(gray_image, cv2.CV_64F, 0, 1, ksize=3)
+    edge_magnitude = np.sqrt(sobelx**2 + sobely**2)
+    return np.mean(edge_magnitude)
 
-    del sobelx, sobely, edge_magnitude
-    gc.collect()
-    return edge_strength
-
-# 🔹 自動縮小影格尺寸（長邊限制在 480px）
 def resize_frame_to_480p(frame):
-    h, w = frame.shape[:2]
-    max_dim = max(h, w)
-    if max_dim <= 480:
-        return frame  # 不需縮小
+    height, width = frame.shape[:2]
+    new_height = 480
+    new_width = int(width * (480 / height))
+    return cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
 
-    scale = 480 / max_dim
-    new_w, new_h = int(w * scale), int(h * scale)
-    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    return resized
-
-# 🔹 單張影格分析
 def detect_watermark_in_frame(frame):
+    frame = resize_frame_to_480p(frame)
     entropy_map, gray = dct_entropy_map_single_image(frame)
     flat = entropy_map.flatten()
     mean_val = np.mean(flat)
     q95_val = np.percentile(flat, 95)
-
     complexity = estimate_complexity(gray)
+
+    # 🧯 防止 NaN 中斷分析
+    if not np.isfinite(mean_val) or not np.isfinite(q95_val):
+        print("❌ 熵統計無效，跳過此幀")
+        return False
+
     threshold_mean = 0.9 + complexity * 0.05
     threshold_q95 = 1.4 + complexity * 0.1
 
     print(f"📊 熱統計: 平均={mean_val:.4f}, q95={q95_val:.4f}, 複雜度={complexity:.4f}")
     suspicious = (mean_val > threshold_mean) or (q95_val > threshold_q95)
 
+    # 主動釋放記憶體
     del entropy_map, gray, flat
     gc.collect()
-
     return suspicious
 
-# 🔹 影片幀分析（記憶體優化版）
-def detect_watermark_in_video_frames(video_path, sample_rate=1800, max_frames=10):
+def detect_watermark_in_video_frames(video_path, sample_rate=1800, max_frames=5):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"無法打開影片：{video_path}")
+        print(f"❌ 無法打開影片：{video_path}")
         return False
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -215,35 +198,25 @@ def detect_watermark_in_video_frames(video_path, sample_rate=1800, max_frames=10
 
     for i in range(0, total_frames, sample_rate):
         if analyzed_frames >= max_frames:
-            print(f"⚠️ 已達最大分析數 {max_frames} 幀，提前結束")
             break
-
         cap.set(cv2.CAP_PROP_POS_FRAMES, i)
         ret, frame = cap.read()
-        if not ret or frame is None:
+        if not ret:
             continue
-
-        # 🔹 加入自動影格縮小
-        frame = resize_frame_to_480p(frame)
-
-        try:
-            if detect_watermark_in_frame(frame):
-                suspicious_count += 1
-                print(f"⚠️ 第 {i} 幀為可疑影格")
-            else:
-                print(f"✅ 第 {i} 幀正常")
-        except Exception as e:
-            print(f"❌ 第 {i} 幀分析錯誤：{e}")
-        finally:
-            del frame
-            gc.collect()  # 強制釋放記憶體
-
         analyzed_frames += 1
+        if detect_watermark_in_frame(frame):
+            suspicious_count += 1
+            print(f"⚠️ 第 {i} 幀為可疑影格")
+        else:
+            print(f"✅ 第 {i} 幀正常")
+        del frame
+        gc.collect()
 
     cap.release()
     ratio = suspicious_count / analyzed_frames if analyzed_frames > 0 else 0
     print(f"📊 可疑影格比例：{ratio:.2%}")
     return ratio
+
 
 # 🔹 音訊浮水印切片分析（每 2 秒）
 def detect_audio_watermark_signal(filepath, segment_duration=2.0, threshold_db=-45):
