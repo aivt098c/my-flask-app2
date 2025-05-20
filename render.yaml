@@ -1,7 +1,11 @@
 services:
   - type: web
-    name: flask-app
+    name: remove-background-app
     env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 7860
     plan: free
-    buildCommand: ""
-    startCommand: gunicorn app:app
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10

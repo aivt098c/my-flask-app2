@@ -1,8 +1,7 @@
 flask
-gunicorn
-opencv-python
-numpy
-scipy
-librosa
-yt-dlp
-moviepy
+gradio
+torch
+transformers
+Pillow
+requests
+timm
