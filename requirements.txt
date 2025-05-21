@@ -1,7 +1,9 @@
-flask
-gradio
-torch
 transformers
+torch
+gradio
+einops
+kornia
+timm
 Pillow
 requests
-timm
+huggingface_hub
